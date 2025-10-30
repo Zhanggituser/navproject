@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="fishbot">
+
+<!-- 机器人底盘 -->
+<xacro:include filename="$(find fishbot_description)/urdf/fishbot/base.urdf.xacro" />
+<!-- 机器人传感器 -->
+<xacro:include filename="$(find fishbot_description)/urdf/fishbot/sensor/camera.urdf.xacro" />
+<xacro:include filename="$(find fishbot_description)/urdf/fishbot/sensor/laser.urdf.xacro" />
+<xacro:include filename="$(find fishbot_description)/urdf/fishbot/sensor/imu.urdf.xacro" />
+
+<!-- 机器人轮子 -->
+<xacro:include filename="$(find fishbot_description)/urdf/fishbot/sensor/actuator/wheel.urdf.xacro" />
+<xacro:include filename="$(find fishbot_description)/urdf/fishbot/sensor/actuator/caster.urdf.xarcro" />
+
+<!-- 机器人控制插件 -->
+<!-- <xacro:include filename="$(find fishbot_description)/urdf/fishbot/plugins/gazebo_control_plugin.xacro" /> -->
+
+<xacro:include filename="$(find fishbot_description)/urdf/fishbot/plugins/gazebo_sensor_plugin.xacro" />
+
+<xacro:include filename="$(find fishbot_description)/urdf/fishbot/fishbot.ros2_control.xacro" />
+
+
+<xacro:base_xacro radius="0.1" length="0.12" />
+<xacro:imu_xacro xyz="0.0 0.0 0.02"/>
+<xacro:camera_xacro xyz="0.10 0.0 0.075"/>
+<xacro:laser_xacro xyz="-0.00 0.0 0.11"/>
+<xacro:wheel_xacro wheel_name="left_wheel" xyz="0.0 0.1 -0.06"/>
+<xacro:wheel_xacro wheel_name="right_wheel" xyz="0.0 -0.1 -0.06"/>
+
+<xacro:caster_xacro caster_name="front_caster" xyz="0.08 0.0 -0.076"/>
+<xacro:caster_xacro caster_name="rear_caster" xyz="-0.08 0.0 -0.076"/>
+
+
+<!-- <xacro:gazebo_control_plugin /> -->
+<xacro:gazebo_sensor_plugin />
+<xacro:fishbot_ros2_control />
+
+</robot>
