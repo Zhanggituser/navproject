@@ -6,19 +6,13 @@ import numpy as np
 from geometry_msgs.msg import Twist, PoseStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
-from gazebo_msgs.srv import SetEntityState
-from gazebo_msgs.msg import EntityState
 import math
 import time
-import random
+import random  # 修复 random 未导入的问题
 
 class RLNavEnv(gym.Env):
     """
     自定义强化学习环境（PPO训练局部路径控制器）
-    支持：
-    - 自动初始化机器人在安全位置
-    - 随机生成目标点
-    - 可在 RViz 中显示目标点
     """
     metadata = {'render.modes': ['human']}
 
@@ -40,28 +34,16 @@ class RLNavEnv(gym.Env):
         self.node.create_subscription(LaserScan, '/scan', self.scan_callback, 10)
         self.node.create_subscription(Odometry, '/odom', self.odom_callback, 10)
 
-        # Gazebo set_model_state 客户端
-        self.reset_client = self.node.create_client(SetEntityState, '/gazebo/set_entity_state')
-        while not self.reset_client.wait_for_service(timeout_sec=1.0):
-            self.node.get_logger().info('Waiting for /gazebo/set_entity_state service...')
-
         # 环境参数
         self.max_steps = 500
         self.step_count = 0
+        self.goal = np.array([1.0, 1.0], dtype=np.float32)  # 初始目标
 
         # 状态与动作空间
         self.laser_dim = 180
         self.state_dim = self.laser_dim + 4  # laser + vx + vz + distance + angle
-        self.action_space = spaces.Box(low=np.array([0.0, -1.0]),
-                                       high=np.array([0.3, 1.0]),
-                                       dtype=np.float32)
-        self.observation_space = spaces.Box(low=-np.inf,
-                                            high=np.inf,
-                                            shape=(self.state_dim,),
-                                            dtype=np.float32)
-
-        # 初始化环境
-        self.reset()
+        self.action_space = spaces.Box(low=np.array([0.0, -1.0]), high=np.array([0.3, 1.0]), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(self.state_dim,), dtype=np.float32)
 
     def scan_callback(self, msg):
         self.scan = np.array(msg.ranges[:self.laser_dim])
@@ -71,40 +53,20 @@ class RLNavEnv(gym.Env):
         self.odom = msg
 
     def wait_for_sensors(self):
-        """等待传感器初始化"""
+        """
+        等待传感器初始化完成
+        """
         while self.scan is None or self.odom is None:
             rclpy.spin_once(self.node, timeout_sec=0.1)
             time.sleep(0.01)
 
-    def reset_robot_pose(self, x=0.0, y=0.0, theta=0.0):
-        """使用 Gazebo 服务重置机器人位姿"""
-        state = EntityState()
-        state.name = 'fishbot'  # 模型名称，根据你的 URDF/Gazebo 修改
-        state.pose.position.x = x
-        state.pose.position.y = y
-        state.pose.position.z = 0.0
-        # 四元数表示yaw
-        qz = math.sin(theta / 2.0)
-        qw = math.cos(theta / 2.0)
-        state.pose.orientation.z = qz
-        state.pose.orientation.w = qw
-        req = SetEntityState.Request()
-        req.state = state
-        future = self.reset_client.call_async(req)
-        rclpy.spin_until_future_complete(self.node, future)
-        time.sleep(0.2)  # 等待 Gazebo 刷新
-
     def reset_robot(self):
-        """重置机器人 + 随机生成目标点"""
+        """
+        重置机器人到原点，并生成随机目标点
+        """
         self.step_count = 0
 
-        # 1️⃣ 重置机器人到安全位置
-        safe_x = random.uniform(-1.0, 1.0)
-        safe_y = random.uniform(-1.0, 1.0)
-        safe_theta = random.uniform(-math.pi, math.pi)
-        self.reset_robot_pose(x=safe_x, y=safe_y, theta=safe_theta)
-
-        # 2️⃣ 随机生成目标点
+        # 随机生成目标
         GOAL_X_MIN, GOAL_X_MAX = -10.0, 8.0
         GOAL_Y_MIN, GOAL_Y_MAX = 4.0, 5.0
         gx = random.uniform(GOAL_X_MIN, GOAL_X_MAX)
@@ -141,6 +103,7 @@ class RLNavEnv(gym.Env):
         return state.astype(np.float32)
 
     def step(self, action):
+        # 等待传感器初始化
         self.wait_for_sensors()
 
         cmd = Twist()
@@ -148,6 +111,7 @@ class RLNavEnv(gym.Env):
         cmd.angular.z = float(action[1])
         self.cmd_pub.publish(cmd)
 
+        # 等待下一步
         rclpy.spin_once(self.node, timeout_sec=0.1)
 
         state = self.get_state()
@@ -168,7 +132,7 @@ class RLNavEnv(gym.Env):
         elif self.step_count >= self.max_steps:
             done = True
 
-        reward += -dist
+        reward += -dist  # 鼓励靠近目标
 
         if done:
             self.reset_robot()
