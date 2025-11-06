@@ -27,6 +27,7 @@ from std_srvs.srv import Empty
 from gazebo_msgs.srv import SetEntityState
 from drl_agent_interfaces.srv import Step, Reset, Seed, GetDimensions, SampleActionSpace
 
+from ament_index_python.packages import get_package_share_directory
 import point_cloud2 as pc2
 from file_manager import load_yaml
 
@@ -59,24 +60,56 @@ class Environment(Node):
         )
         self.get_logger().info(f"Environment run mode: {self.environment_mode}")
 
-        # Load environment config file
-        drl_agent_src_path_env = "DRL_AGENT_SRC_PATH"
-        drl_agent_src_path = os.getenv(drl_agent_src_path_env)
-        if drl_agent_src_path is None:
-            self.get_logger().error(
-                f"Environment variable: {drl_agent_src_path_env} is not set"
-            )
-            sys.exit(-1)
+        # Load environment config file.
+        # Prefer package share directory when installed; fallback to DRL_AGENT_SRC_PATH
         env_config_file_name = "environment.yaml"
         start_goal_pairs_file = "test_config.yaml"
-        env_config_file_path = os.path.join(
-            drl_agent_src_path, "drl_agent", "config", env_config_file_name
-        )
-        start_goal_pairs_file_path = os.path.join(
-            drl_agent_src_path, "drl_agent", "config", start_goal_pairs_file
-        )
+
+        # Try to locate config in installed package share (recommended for ROS2)
+        env_config_file_path = None
+        start_goal_pairs_file_path = None
+        try:
+            pkg_share = get_package_share_directory("drl_agent")
+            candidate_env = os.path.join(pkg_share, "config", env_config_file_name)
+            candidate_start_goal = os.path.join(pkg_share, "config", start_goal_pairs_file)
+            if os.path.exists(candidate_env):
+                env_config_file_path = candidate_env
+            if os.path.exists(candidate_start_goal):
+                start_goal_pairs_file_path = candidate_start_goal
+        except Exception:
+            # get_package_share_directory may fail if package not installed; ignore and fallback
+            pass
+
+        # Fallback: use DRL_AGENT_SRC_PATH environment variable. Handle both layouts:
+        # 1) <DRL_AGENT_SRC_PATH>/drl_agent/config/...  (common)
+        # 2) <DRL_AGENT_SRC_PATH>/src/drl_agent/config/... (projects using src/ layout)
+        if env_config_file_path is None or start_goal_pairs_file_path is None:
+            drl_agent_src_path_env = "DRL_AGENT_SRC_PATH"
+            drl_agent_src_path = os.getenv(drl_agent_src_path_env)
+            if drl_agent_src_path is None:
+                self.get_logger().error(
+                    f"Environment variable: {drl_agent_src_path_env} is not set and package share lookup failed"
+                )
+                sys.exit(-1)
+
+            candidate1 = os.path.join(drl_agent_src_path, "drl_agent", "config")
+            candidate2 = os.path.join(drl_agent_src_path, "src", "drl_agent", "config")
+
+            # prefer candidate1 if exists, else candidate2
+            if os.path.exists(os.path.join(candidate1, env_config_file_name)):
+                env_config_file_path = os.path.join(candidate1, env_config_file_name)
+            elif os.path.exists(os.path.join(candidate2, env_config_file_name)):
+                env_config_file_path = os.path.join(candidate2, env_config_file_name)
+
+            if os.path.exists(os.path.join(candidate1, start_goal_pairs_file)):
+                start_goal_pairs_file_path = os.path.join(candidate1, start_goal_pairs_file)
+            elif os.path.exists(os.path.join(candidate2, start_goal_pairs_file)):
+                start_goal_pairs_file_path = os.path.join(candidate2, start_goal_pairs_file)
+
         # Define the dimensions of the state, action, and maximum action value
         try:
+            if env_config_file_path is None:
+                raise FileNotFoundError("environment.yaml not found in package share or DRL_AGENT_SRC_PATH")
             self.config = load_yaml(env_config_file_path)
         except Exception as e:
             self.get_logger().info(f"Unable to load config file: {e}")
@@ -103,6 +136,19 @@ class Environment(Node):
         ]
 
         self.lidar_max_range = self.threshold_params_config["lidar_max_range"]
+
+        # Initialize default environment and agent state so service calls before
+        # the first sensor callbacks don't crash (e.g., on startup or during tests)
+        try:
+            self.environment_state = np.ones(self.environment_dim) * self.lidar_max_range
+        except Exception:
+            # Fallback in case environment_dim or lidar_max_range not set correctly
+            self.environment_state = None
+        try:
+            # agent_state expected to be length agent_dim (commonly 4)
+            self.agent_state = np.zeros(self.agent_dim)
+        except Exception:
+            self.agent_state = None
 
         # Callback groups for handling sensors and services in parallel
         self.odom_callback_group = MutuallyExclusiveCallbackGroup()
@@ -265,6 +311,9 @@ class Environment(Node):
     def get_environment_state(self):
         """Returns a copy of the environment state"""
         with self.environment_state_lock:
+            if self.environment_state is None:
+                # return a sensible default if sensor data not yet available
+                return np.ones(self.environment_dim) * self.lidar_max_range
             return self.environment_state.copy()
 
     def update_agent_state(self, odom):
@@ -310,6 +359,9 @@ class Environment(Node):
     def get_agent_state(self):
         """Return a copy of the agent state"""
         with self.agent_state_lock:
+            if self.agent_state is None:
+                # default agent state (distance, theta, linear_vel, angular_vel)
+                return np.zeros(self.agent_dim)
             return self.agent_state.copy()
 
     def set_gazebo_model_state(self, model_state):

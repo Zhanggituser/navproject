@@ -20,18 +20,51 @@ class TrainTD7(EnvInterface):
         # Load training config parameters
         drl_agent_src_path_env = "DRL_AGENT_SRC_PATH"
         drl_agent_src_path = os.getenv(drl_agent_src_path_env)
-        if drl_agent_src_path is None:
-            self.get_logger().error(
-                f"Environment variable: {drl_agent_src_path_env}, is not set"
-            )
-        drl_agent_pkg_path = os.path.join(drl_agent_src_path, "drl_agent")
 
-        self.hyperparameters_path = os.path.join(
-            drl_agent_pkg_path, "config", "hyperparameters.yaml"
-        )
-        self.train_config_file_path = os.path.join(
-            drl_agent_pkg_path, "config", "train_config.yaml"
-        )
+        # Build candidate roots similar to environment.py to support src/src layout
+        candidates = []
+        if drl_agent_src_path:
+            candidates.append(os.path.join(drl_agent_src_path, "drl_agent"))
+        try:
+            from ament_index_python.packages import get_package_share_directory
+
+            pkg_share = get_package_share_directory("drl_agent")
+            if pkg_share:
+                candidates.append(pkg_share)
+        except Exception:
+            pass
+
+        this_pkg_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        candidates.append(this_pkg_root)
+        maybe_ws_src = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        candidates.append(os.path.join(maybe_ws_src, "drl_agent"))
+
+        seen = set()
+        normalized = []
+        for c in candidates:
+            p = os.path.normpath(c)
+            if p not in seen:
+                seen.add(p)
+                normalized.append(p)
+
+        train_config = None
+        hyperparameters = None
+        tried = []
+        for root in normalized:
+            cfg = os.path.join(root, "config", "train_config.yaml")
+            tried.append(cfg)
+            if os.path.exists(cfg):
+                train_config = cfg
+                hyperparameters = os.path.join(root, "config", "hyperparameters.yaml")
+                drl_agent_pkg_path = root
+                break
+
+        if train_config is None:
+            self.get_logger().error(f"Unable to find train_config.yaml; tried: {tried}")
+            sys.exit(-1)
+
+        self.hyperparameters_path = hyperparameters
+        self.train_config_file_path = train_config
 
         # Load config file
         try:
